@@ -46,6 +46,7 @@ class NodeState {
 
 public class WifiDirectNode implements WifiP2pManager.ConnectionInfoListener,
         WifiP2pManager.GroupInfoListener, WifiP2pManager.PeerListListener {
+    private PeerConnection peerConnection;
 
     private static final long periodicInterval = 15000;
 
@@ -75,6 +76,7 @@ public class WifiDirectNode implements WifiP2pManager.ConnectionInfoListener,
 
     private InternalCallback connectionCallback = new InternalCallback();
     private DiscoveringCallback discoveringCallback;
+
 
     public interface ConnectionCallback {
 
@@ -316,12 +318,13 @@ public class WifiDirectNode implements WifiP2pManager.ConnectionInfoListener,
 
         peerConfig = new WifiP2pConfig();
         peerConfig.deviceAddress = deviceAddress;
-        peerConfig.groupOwnerIntent = groupOwnerIntent;
+        peerConfig.groupOwnerIntent = 1;
         peerConfig.wps.setup = WpsInfo.PBC;
 
         if (nodeState.get() == NodeState.CONNECTED && groupOwner != null) {
             if (groupOwner.deviceAddress.equals(deviceAddress)) {
                 wifiP2pManager.requestGroupInfo(channel, this);
+
                 connectionCallback.onConnect();
             } else {
                 pendingConnect = true;
@@ -367,6 +370,10 @@ public class WifiDirectNode implements WifiP2pManager.ConnectionInfoListener,
                     nodeState.set(NodeState.DISCONNECTED);
                     peerConfig = null;
                 }
+                new Listener().execute();
+                peerConnection = new PeerConnection(info.groupOwnerAddress.getHostAddress());
+                peerConnection.sendMessage("Yay it works!");
+
                 break;
             case NodeState.DISCONNECTING:
             case NodeState.DISCONNECTED:
@@ -391,6 +398,7 @@ public class WifiDirectNode implements WifiP2pManager.ConnectionInfoListener,
                 break;
         }
     }
+    
 
     private void initiateConnect() {
         pendingConnect = false;
