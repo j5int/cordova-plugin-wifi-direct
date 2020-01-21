@@ -14,10 +14,13 @@ import android.net.wifi.p2p.nsd.WifiP2pDnsSdServiceRequest;
 import android.os.Handler;
 import android.text.TextUtils;
 import android.util.Log;
+import org.apache.cordova.CordovaPlugin;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+
+import com.android.plugins.wifidirect.WifiDirect;
 
 /**
  * Created by JasonYang on 2017/9/20.
@@ -46,7 +49,6 @@ class NodeState {
 
 public class WifiDirectNode implements WifiP2pManager.ConnectionInfoListener,
         WifiP2pManager.GroupInfoListener, WifiP2pManager.PeerListListener {
-    private PeerConnection peerConnection;
 
     private static final long periodicInterval = 15000;
 
@@ -76,6 +78,10 @@ public class WifiDirectNode implements WifiP2pManager.ConnectionInfoListener,
 
     private InternalCallback connectionCallback = new InternalCallback();
     private DiscoveringCallback discoveringCallback;
+
+    private Listener server;
+    private Client peerConnection;
+    private CordovaPlugin thisPlugin;
 
 
     public interface ConnectionCallback {
@@ -115,9 +121,10 @@ public class WifiDirectNode implements WifiP2pManager.ConnectionInfoListener,
         void onDevicesUpdate(List<WifiP2pDevice> updates);
     }
 
-    public WifiDirectNode(final Context context, ServiceData serviceData) {
+    public WifiDirectNode(final Context context, ServiceData serviceData, CordovaPlugin cordovaPlugin) {
         this.context = context;
         this.serviceData = serviceData;
+        thisPlugin = cordovaPlugin;
 
         handler = new Handler(context.getMainLooper());
 
@@ -314,11 +321,12 @@ public class WifiDirectNode implements WifiP2pManager.ConnectionInfoListener,
             return;
         }
 
+
         connectionCallback.attach(cb);
 
         peerConfig = new WifiP2pConfig();
         peerConfig.deviceAddress = deviceAddress;
-        peerConfig.groupOwnerIntent = 1;
+        peerConfig.groupOwnerIntent = groupOwnerIntent;
         peerConfig.wps.setup = WpsInfo.PBC;
 
         if (nodeState.get() == NodeState.CONNECTED && groupOwner != null) {
@@ -334,9 +342,38 @@ public class WifiDirectNode implements WifiP2pManager.ConnectionInfoListener,
         }
     }
 
+    public void sendMessage(final String msg) {
+        thisPlugin.cordova.getThreadPool().execute(new Runnable() {
+            public void run() {
+                peerConnection.sendMessage(msg);
+            }
+        });
+        //peerConnection.sendMessage(msg);
+    }
+
+    public void disconnectPeer() {
+        thisPlugin.cordova.getThreadPool().execute(new Runnable() {
+            public void run() {
+                try {
+                    peerConnection.disconnect();
+                }
+                catch (Exception e){
+                    Log.d("WifiDirectNode", e.getMessage());
+                }
+
+            }
+        });
+
+    }
+
     public void requestConnectionInfo() {
         if (wifiP2pManager == null) return;
         wifiP2pManager.requestConnectionInfo(channel, this);
+    }
+
+    public void setupPeerConnection(String ip, boolean go) {
+        peerConnection = new Client(ip, 5336, go);
+        peerConnection.start();
     }
 
     @Override
@@ -348,13 +385,28 @@ public class WifiDirectNode implements WifiP2pManager.ConnectionInfoListener,
             groupOwner = null;
         }
 
+        disconnectPeer();
+
+        if (info.groupFormed && info.isGroupOwner) {
+            Log.d("SPECIAL DEBUG","You are the group owner");
+
+        } else if (info.groupFormed) {
+            Log.d("SPECIAL DEBUG","You aren't the group owner");
+
+            setupPeerConnection(info.groupOwnerAddress.getHostAddress(), false);
+
+        }
+
+
+
         switch (nodeState.get()) {
             case NodeState.INITIATED:
+            //Log.d("SPECIAL DEBUG","INITIATED");
             case NodeState.CONNECTING:
+            //Log.d("SPECIAL DEBUG","CONNECTING");
                 if (info.groupFormed) {
                     nodeState.set(NodeState.CONNECTED);
                     wifiP2pManager.requestGroupInfo(channel, this);
-
                     connectionCallback.onConnect();
                 } else {
                     wifiP2pManager.cancelConnect(channel, null);
@@ -366,17 +418,17 @@ public class WifiDirectNode implements WifiP2pManager.ConnectionInfoListener,
                 }
                 break;
             case NodeState.CONNECTED:
+                //Log.d("SPECIAL DEBUG","CONNECTED");
                 if (!info.groupFormed) {
                     nodeState.set(NodeState.DISCONNECTED);
                     peerConfig = null;
                 }
-                new Listener().execute();
-                peerConnection = new PeerConnection(info.groupOwnerAddress.getHostAddress());
-                peerConnection.sendMessage("Yay it works!");
 
                 break;
             case NodeState.DISCONNECTING:
+            //Log.d("SPECIAL DEBUG","DISCONNECTING");
             case NodeState.DISCONNECTED:
+            //Log.d("SPECIAL DEBUG","DISCONNECTED");
                 if (info.groupFormed) {
                     nodeState.set(NodeState.CONNECTED);
                     wifiP2pManager.requestGroupInfo(channel, this);
@@ -386,6 +438,7 @@ public class WifiDirectNode implements WifiP2pManager.ConnectionInfoListener,
                     }
 
                     pendingConnect = false;
+
                 } else {
                     if (!pendingConnect && peerConfig != null) {
                         peerConfig = null;
@@ -425,6 +478,7 @@ public class WifiDirectNode implements WifiP2pManager.ConnectionInfoListener,
     }
 
     public void disconnect() {
+        disconnectPeer();
         if (wifiP2pManager == null) return;
 
         connectionCallback.onConnectError("Disconnect!");
